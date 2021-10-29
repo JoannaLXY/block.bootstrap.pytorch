@@ -3,6 +3,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
+import pickle
+
 from bootstrap.lib.options import Options
 from bootstrap.lib.logger import Logger
 from bootstrap.models.metrics.accuracy import accuracy
@@ -24,6 +26,8 @@ class VRDPredicate(nn.Module):
         self.fps = {50:[], 100:[]}
         self.scores = {50:[], 100:[]}
         self.total_num_gts = {50:0, 100:0}
+        self.res = {50:{}, 100:{}} # image: pair: {gt: ; pd: (predicate, score)}
+
 
     def forward(self, cri_out, net_out, batch):
         out = {}
@@ -100,14 +104,15 @@ class VRDPredicate(nn.Module):
             gt_boxes.append(_gt_boxes)
 
         for R in [50, 100]:
-            _tp, _fp, _score, _num_gts = vrd_utils.eval_batch(
+            _tp, _fp, _score, _num_gts, _res = vrd_utils.eval_batch(
                 [det_labels, det_boxes],
                 [gt_labels, gt_boxes],
-                num_dets=R)
+                num_dets=R, batch=batch)
             self.total_num_gts[R] += _num_gts
             self.tps[R] += _tp
             self.fps[R] += _fp
             self.scores[R] += _score
+            self.res[R].update(_res)
 
         return out
 
@@ -116,4 +121,6 @@ class VRDPredicate(nn.Module):
             top_recall = vrd_utils.calculate_recall(
                 R, self.tps, self.fps, self.scores, self.total_num_gts)
             Logger().log_value(f'{self.split}_epoch.predicate.R_{R}', top_recall, should_print=True)
+            with open(f'results_{R}.pickle', 'wb') as handle:
+                pickle.dump(self.res, handle, protocol=pickle.HIGHEST_PROTOCOL)
         self.reset()

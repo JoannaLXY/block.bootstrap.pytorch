@@ -1,5 +1,40 @@
 import torch
 import numpy as np
+import collections
+import os.path as osp
+import json 
+import collections
+
+dir_data = '/home/lixuanyi199801/block.bootstrap.pytorch/data/vrd'
+dir_raw_json = osp.join(dir_data, 'annotations','raw')
+rel_vocab_path = osp.join(dir_raw_json, 'predicates.json')
+obj_vocab_path = osp.join(dir_raw_json, 'objects.json')
+
+def extract_vocab(path, bg=True):
+    if bg:
+        vocab = {
+            'nametoi': {'__background__':0},
+            'itoname': {0:'__background__'}
+        }
+    else:
+        vocab = {
+            'nametoi': {},
+            'itoname': {}
+        }
+
+    with open(path, 'r') as f:
+        data = json.load(f)
+
+    for w in data:
+        i = len(vocab['nametoi'])
+        vocab['nametoi'][w] = i
+        vocab['itoname'][i] = w
+    return vocab
+
+vocabs = {
+    'relationships': extract_vocab(rel_vocab_path,bg=True),
+    'objects': extract_vocab(obj_vocab_path,bg=True)
+}
 
 def calculate_recall(R, tps, fps, scores, total_num_gts):
     tp = np.array(tps[R])
@@ -16,7 +51,7 @@ def calculate_recall(R, tps, fps, scores, total_num_gts):
     top_recall = recall[-1] * 100
     return top_recall
 
-def eval_batch(dets_file, gts_file, num_dets=50, ov_thresh=0.5):
+def eval_batch(dets_file, gts_file, num_dets=50, ov_thresh=0.5, batch = None):
     dets, det_bboxes = dets_file
     all_gts, all_gt_bboxes = gts_file
     num_img = len(dets)
@@ -24,12 +59,16 @@ def eval_batch(dets_file, gts_file, num_dets=50, ov_thresh=0.5):
     fp = []
     score = []
     total_num_gts = 0
+    res = {}  # append mode
+
     for i in range(num_img):
         gts = all_gts[i]
         gt_bboxes = all_gt_bboxes[i]
         num_gts = gts.shape[0]
         total_num_gts += num_gts
         gt_detected = np.zeros(num_gts)
+        image_filename = batch['image_id'][i]
+        res[image_filename] = collections.defaultdict(list)
         if isinstance(dets[i], np.ndarray) and dets[i].shape[0] > 0:
             det_score = np.log(dets[i][:, 0]) + np.log(dets[i][:, 1]) + np.log(dets[i][:, 2])
             inds = np.argsort(det_score)[::-1]
@@ -42,6 +81,25 @@ def eval_batch(dets_file, gts_file, num_dets=50, ov_thresh=0.5):
             for j in range(num_dets):
                 ov_max = 0
                 arg_max = -1
+
+                key = ""
+                object_name = vocabs['objects']['itoname'][top_dets[j][0]]
+                key+=object_name+'_'
+                key+=str(top_det_bboxes[j][0][1])+'_'
+                key+=str(top_det_bboxes[j][0][3])+'_'
+                key+=str(top_det_bboxes[j][0][0])+'_'
+                key+=str(top_det_bboxes[j][0][2])+'_'
+
+                subject_name = vocabs['objects']['itoname'][top_dets[j][2]]
+                key+=subject_name+'_'
+                key+=(str(top_det_bboxes[j][1][1]))+'_'
+                key+=(str(top_det_bboxes[j][1][3]))+'_'
+                key+=(str(top_det_bboxes[j][1][0]))+'_'
+                key+=(str(top_det_bboxes[j][1][2]))
+
+                predicate = vocabs['relationships']['itoname'][top_dets[j][1]]
+                res[image_filename][key].append((predicate, str(top_scores[j])))
+
                 for k in range(num_gts):
                     if gt_detected[k] == 0 and top_dets[j, 0] == gts[k, 0] and top_dets[j, 1] == gts[k, 1] and top_dets[j, 2] == gts[k, 2]:
                         ov = computeOverlap(top_det_bboxes[j, :, :], gt_bboxes[k, :, :])
@@ -56,7 +114,7 @@ def eval_batch(dets_file, gts_file, num_dets=50, ov_thresh=0.5):
                     tp.append(0)
                     fp.append(1)
                 score.append(top_scores[j])
-    return tp, fp, score, total_num_gts
+    return tp, fp, score, total_num_gts, res
 
 def eval_batch_union(dets_file, gts_file, num_dets=50, ov_thresh=0.5):
     dets, det_bboxes = dets_file
